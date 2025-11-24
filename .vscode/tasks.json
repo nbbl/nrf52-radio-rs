@@ -4,7 +4,17 @@
         {
             "label": "Build Hello World",
             "type": "shell",
-            "command": "cargo build --bin hello"
+            "command": "export DEFMT_LOG=info && cargo build --bin hello"
+        },
+        {
+            "label": "Build Beacon",
+            "type": "shell",
+            "command": "export DEFMT_LOG=info && cargo build --bin ble_beacon"
+        },
+        {
+            "label": "Build Blinky Embassy",
+            "type": "shell",
+            "command": "export DEFMT_LOG=info && cargo build --bin blinky_embassy"
         }
     ]
 }
