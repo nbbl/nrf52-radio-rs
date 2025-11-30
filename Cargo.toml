@@ -54,6 +54,7 @@ cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7"
 defmt = "1.0"
 defmt-rtt = "1.0"
+display-interface = { version = "0.5.0", features = ["defmt-03"] }
 embassy-executor = { version = "0.9.1", features = [
     "arch-cortex-m",
     "executor-thread",
@@ -71,6 +72,7 @@ embassy-time = { version = "0.5.0", features = [
     "defmt",
     "defmt-timestamp-uptime",
 ] }
+embedded-graphics = { version = "0.8.1", features = ["defmt"] }
 embedded-hal = "1.0.0"
 embedded-io = "0.7.1"
 nrf-mpsl = { version = "0.3.0", default-features = false }
@@ -79,8 +81,10 @@ nrf-sdc = { version = "0.4", default-features = false, features = [
     "nrf52840",
     "peripheral",
 ] }
+nrf52840-hal = "0.19.0"
 panic-probe = { version = "1.0", features = ["print-defmt"] }
 semihosting = "0.1.20"
+ssd1306-i2c = "0.1.5"
 static_cell = "2"
 trouble-host = { version = "0.5.1", features = ["defmt"] }
 

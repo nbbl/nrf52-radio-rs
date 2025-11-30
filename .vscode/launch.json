@@ -48,6 +48,22 @@
           "rttEnabled": true
         }
       ],
+    },
+    {
+      "preLaunchTask": "Build SSD1306 Screen",
+      "type": "probe-rs-debug",
+      "request": "launch",
+      "name": "Run SSD1306 Screen with probe-rs",
+      "flashingConfig": {
+        "flashingEnabled": true,
+      },
+      "chip": "nRF52840_xxAA",
+      "coreConfigs": [
+        {
+          "programBinary": "${workspaceFolder}/target/thumbv7em-none-eabihf/debug/ssd1306_screen",
+          "rttEnabled": true
+        }
+      ],
     }
   ]
 }
