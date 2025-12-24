@@ -64,6 +64,22 @@
           "rttEnabled": true
         }
       ],
+    },
+    {
+      "preLaunchTask": "Build Sensor Reading",
+      "type": "probe-rs-debug",
+      "request": "launch",
+      "name": "Run BLE sensor reading with probe-rs",
+      "flashingConfig": {
+        "flashingEnabled": true,
+      },
+      "chip": "nRF52840_xxAA",
+      "coreConfigs": [
+        {
+          "programBinary": "${workspaceFolder}/target/thumbv7em-none-eabihf/debug/sensor_reading",
+          "rttEnabled": true
+        }
+      ],
     }
   ]
 }

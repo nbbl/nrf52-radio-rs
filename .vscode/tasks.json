@@ -20,6 +20,11 @@
             "label": "Build SSD1306 Screen",
             "type": "shell",
             "command": "export DEFMT_LOG=info && cargo build --bin ssd1306_screen"
+        },
+        {
+            "label": "Build Sensor Reading",
+            "type": "shell",
+            "command": "export DEFMT_LOG=info && cargo build --bin sensor_reading"
         }
     ]
 }
