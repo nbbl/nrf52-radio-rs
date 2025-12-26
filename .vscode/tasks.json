@@ -2,11 +2,6 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build Hello World",
-            "type": "shell",
-            "command": "export DEFMT_LOG=info && cargo build --bin hello"
-        },
-        {
             "label": "Build Beacon",
             "type": "shell",
             "command": "export DEFMT_LOG=info && cargo build --bin ble_beacon"

@@ -2,22 +2,6 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "preLaunchTask": "Build Hello World",
-      "type": "probe-rs-debug",
-      "request": "launch",
-      "name": "Run hello world with probe-rs",
-      "flashingConfig": {
-        "flashingEnabled": true,
-      },
-      "chip": "nRF52840_xxAA",
-      "coreConfigs": [
-        {
-          "programBinary": "${workspaceFolder}/target/thumbv7em-none-eabihf/debug/hello",
-          "rttEnabled": true
-        }
-      ],
-    },
-    {
       "preLaunchTask": "Build Beacon",
       "type": "probe-rs-debug",
       "request": "launch",
@@ -69,7 +53,7 @@
       "preLaunchTask": "Build Sensor Reading",
       "type": "probe-rs-debug",
       "request": "launch",
-      "name": "Run BLE sensor reading with probe-rs",
+      "name": "Run ble sensor reading with probe-rs",
       "flashingConfig": {
         "flashingEnabled": true,
       },
