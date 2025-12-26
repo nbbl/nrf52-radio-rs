@@ -8,7 +8,8 @@
 
 use defmt::{info, warn};
 use embassy_executor::Spawner;
-use embassy_futures::join::join;
+use embassy_futures::{join::join, select::select};
+use embassy_time::Timer;
 use nrf_mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::SoftdeviceController;
 use nrf52_radio_rs::Board;
@@ -24,6 +25,7 @@ const L2CAP_CHANNELS_MAX: usize = 2; // Signal + att
 #[gatt_server]
 struct Server {
     battery_service: BatteryService,
+    gnss_service: GnssService,
 }
 
 /// Battery service
@@ -36,6 +38,12 @@ struct BatteryService {
     level: u8,
     #[characteristic(uuid = "408813df-5dd4-1f87-ec11-cdb001100000", write, read, notify)]
     status: bool,
+}
+
+#[gatt_service(uuid = service::LOCATION_AND_NAVIGATION)]
+struct GnssService {
+    #[characteristic(uuid = characteristic::CURRENT_TIME, read, notify)]
+    utc_time: [u8; 6],
 }
 
 /// Run the BLE stack.
@@ -53,12 +61,8 @@ pub async fn run_ble(mut peri: Peripheral<'_, SoftdeviceController<'_>, DefaultP
                 Ok(conn) => {
                     // set up tasks when the connection is established to a central, so they don't run when no one is connected.
                     let a = gatt_events_task(&server, &conn);
-                    // Other task could be added like this:
-                    // `let b = custom_task(&server, &conn);`
-                    // run until any task ends (usually because the connection has been closed),
-                    // then return to advertising state:
-                    // `select(a, b).await;`
-                    let _ = a.await;
+                    let b = gnss_task(&server, &conn);
+                    let _ = select(a, b).await;
                 }
                 Err(e) => {
                     let e = defmt::Debug2Format(&e);
@@ -77,6 +81,23 @@ async fn ble_background_task(mut runner: Runner<'_, SoftdeviceController<'_>, De
             let e = defmt::Debug2Format(&e);
             panic!("[ble_background_task] error: {:?}", e);
         }
+    }
+}
+
+async fn gnss_task<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '_, P>) {
+    let mut tick: u8 = 0;
+    loop {
+        match server.gnss_service.utc_time.notify(conn, &[tick; 6]).await {
+            Ok(()) => {
+                info!("[gnss_task] notified UTC time: {}", tick);
+            }
+            Err(_) => {
+                info!("[gnss_task] error notifying UTC time");
+                break;
+            }
+        };
+        tick = tick.wrapping_add(1);
+        Timer::after_secs(1).await;
     }
 }
 

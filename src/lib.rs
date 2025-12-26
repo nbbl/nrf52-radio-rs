@@ -4,7 +4,7 @@
 use defmt_rtt as _;
 use embassy_nrf::{
     Peri,
-    peripherals::{P0_05, P0_06, RNG, TIMER0, TWISPI0},
+    peripherals::{P0_05, P0_06, RNG, TIMER0, TWISPI0, UARTE0},
 };
 use panic_probe as _;
 
@@ -27,6 +27,8 @@ pub struct Board {
     pub ble: bsp::ble::BleControllerBuilder<'static>,
     /// Two-Wire & Serial Peripheral Interface 0 (shared)
     pub twispi0: Peri<'static, TWISPI0>,
+    // TODO: documentation.
+    pub uarte0: Peri<'static, UARTE0>,
 }
 
 impl Default for Board {
@@ -49,6 +51,7 @@ impl Board {
             rng: p.RNG,
             timer0: p.TIMER0,
             twispi0: p.TWISPI0,
+            uarte0: p.UARTE0
         }
     }
 }
