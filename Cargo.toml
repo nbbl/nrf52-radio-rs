@@ -76,6 +76,7 @@ embassy-time = { version = "0.5.0", features = [
 embedded-graphics = { version = "0.8.1", features = ["defmt"] }
 embedded-hal = "1.0.0"
 embedded-io = "0.7.1"
+nmea = { version = "0.7.0", default-features = false }
 nrf-mpsl = { version = "0.3.0", default-features = false }
 nrf-sdc = { version = "0.4", default-features = false, features = [
     "defmt",

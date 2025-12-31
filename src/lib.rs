@@ -4,7 +4,9 @@
 use defmt_rtt as _;
 use embassy_nrf::{
     Peri,
-    peripherals::{P0_05, P0_06, RNG, TIMER0, TWISPI0, UARTE0},
+    peripherals::{
+        P0_05, P0_06, P0_26, P0_27, P1_09, PPI_CH0, PPI_CH1, RNG, TIMER0, TIMER1, TWISPI0, UARTE0,
+    },
 };
 use panic_probe as _;
 
@@ -19,8 +21,16 @@ pub struct Board {
     pub p0_05: Peri<'static, P0_05>,
     /// GPIO 0.06 (OLED I2C SDA on Wio Tracker L1)
     pub p0_06: Peri<'static, P0_06>,
+    /// GPIO 0.26 (GNSS RX on Wio Tracker L1)
+    pub p0_26: Peri<'static, P0_26>,
+    /// GPIO 0.27 (GNSS TX on Wio Tracker L1)
+    pub p0_27: Peri<'static, P0_27>,
+    /// GPIO 1.09 (GNSS wakeup on Wio Tracker L1)
+    pub p1_09: Peri<'static, P1_09>,
     /// TIMER0 peripheral
     pub timer0: Peri<'static, TIMER0>,
+    /// TIMER1 peripheral
+    pub timer1: Peri<'static, TIMER1>,
     /// Random number generator
     pub rng: Peri<'static, RNG>,
     /// Bluetooth Low Energy
@@ -29,6 +39,8 @@ pub struct Board {
     pub twispi0: Peri<'static, TWISPI0>,
     // TODO: documentation.
     pub uarte0: Peri<'static, UARTE0>,
+    pub ppi_ch0: Peri<'static, PPI_CH0>,
+    pub ppi_ch1: Peri<'static, PPI_CH1>,
 }
 
 impl Default for Board {
@@ -48,10 +60,16 @@ impl Board {
             ),
             p0_05: p.P0_05,
             p0_06: p.P0_06,
+            p0_26: p.P0_26,
+            p0_27: p.P0_27,
+            p1_09: p.P1_09,
             rng: p.RNG,
             timer0: p.TIMER0,
+            timer1: p.TIMER1,
             twispi0: p.TWISPI0,
-            uarte0: p.UARTE0
+            uarte0: p.UARTE0,
+            ppi_ch0: p.PPI_CH0,
+            ppi_ch1: p.PPI_CH1,
         }
     }
 }

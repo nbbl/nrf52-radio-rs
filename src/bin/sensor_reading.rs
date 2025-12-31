@@ -9,7 +9,11 @@
 use defmt::{info, warn};
 use embassy_executor::Spawner;
 use embassy_futures::{join::join, select::select};
-use embassy_time::Timer;
+use embassy_nrf::{
+    bind_interrupts, peripherals,
+    uarte::{self, Baudrate, Config, Parity, Uarte, UarteRxWithIdle},
+};
+use nmea::ParseResult::{self, GGA};
 use nrf_mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::SoftdeviceController;
 use nrf52_radio_rs::Board;
@@ -47,8 +51,11 @@ struct GnssService {
 }
 
 /// Run the BLE stack.
-pub async fn run_ble(mut peri: Peripheral<'_, SoftdeviceController<'_>, DefaultPacketPool>) {
-    info!("Starting advertising and GATT service");
+pub async fn run_ble(
+    mut peri: Peripheral<'_, SoftdeviceController<'_>, DefaultPacketPool>,
+    gnss_uarte: &mut UarteRxWithIdle<'_>,
+) {
+    info!("[adv] start advertising and GATT service");
     let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
         name: "TrouBLE",
         appearance: &appearance::power_device::GENERIC_POWER_DEVICE,
@@ -60,9 +67,9 @@ pub async fn run_ble(mut peri: Peripheral<'_, SoftdeviceController<'_>, DefaultP
             match advertise("Trouble Example", &mut peri, &server).await {
                 Ok(conn) => {
                     // set up tasks when the connection is established to a central, so they don't run when no one is connected.
-                    let a = gatt_events_task(&server, &conn);
-                    let b = gnss_task(&server, &conn);
-                    let _ = select(a, b).await;
+                    let gatt = gatt_events_task(&server, &conn);
+                    let gnss = gnss_task(&server, &conn, gnss_uarte);
+                    let _ = select(gatt, gnss).await;
                 }
                 Err(e) => {
                     let e = defmt::Debug2Format(&e);
@@ -84,20 +91,62 @@ async fn ble_background_task(mut runner: Runner<'_, SoftdeviceController<'_>, De
     }
 }
 
-async fn gnss_task<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '_, P>) {
-    let mut tick: u8 = 0;
+fn send_nmea_msg(parse_result: ParseResult) {
+    match parse_result {
+        GGA(gps_fix) => {
+            let gps_fix_str = defmt::Debug2Format(&gps_fix);
+            info!("[send_nmea_msg] received GPS fix: {}", gps_fix_str)
+        }
+        _ => {
+            warn!("[send_nmea_msg] unexpected NMEA sentence received .")
+        }
+    }
+}
+
+async fn gnss_task<P: PacketPool>(
+    server: &Server<'_>,
+    conn: &GattConnection<'_, '_, P>,
+    gnss_uarte: &mut UarteRxWithIdle<'_>,
+) {
+    // TODO: Put GNSS module into standby until it is actually needed?
+    // (when BLE connection is established.)
+
+    // NMEA 0183 messages have a max length of 82 chars:
+    let mut nmea_buf = [0u8; 82];
+    let mut buf_idx: usize = 0;
     loop {
-        match server.gnss_service.utc_time.notify(conn, &[tick; 6]).await {
-            Ok(()) => {
-                info!("[gnss_task] notified UTC time: {}", tick);
+        match gnss_uarte
+            .read_until_idle(&mut nmea_buf[buf_idx..buf_idx + 1])
+            .await
+        {
+            Ok(rx_len) => {
+                let nmea_sentence_terminated =
+                    buf_idx > 0 && nmea_buf[buf_idx - 1..buf_idx + 1] == *"\r\n".as_bytes();
+                if rx_len == 0 || nmea_sentence_terminated {
+                    // let parsed = nmea::parse_bytes(&nmea_buf[..buf_idx + 1]);
+                    info!(
+                        "[gnss_task] received NMEA sentence: {}",
+                        str::from_utf8(&nmea_buf[..buf_idx + 1]).unwrap_or("UTF8 error"),
+                    );
+                    buf_idx = 0;
+                    // match parsed {
+                    //     Ok(valid) => {
+                    //         send_nmea_msg(valid);
+                    //     }
+                    //     Err(_) => {
+                    //         info!("[gnss_task] invalid NMEA sentence received.");
+                    //     }
+                    // }
+                } else {
+                    buf_idx += 1;
+                    continue;
+                }
             }
-            Err(_) => {
-                info!("[gnss_task] error notifying UTC time");
+            Err(e) => {
+                warn!("[gnss_task] error receiving bytes: {:?}", e);
                 break;
             }
         };
-        tick = tick.wrapping_add(1);
-        Timer::after_secs(1).await;
     }
 }
 
@@ -186,8 +235,23 @@ async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> ! {
-    let b = Board::default();
-    let (sdc, mpsl) = b.ble.init(b.timer0, b.rng).unwrap();
+    bind_interrupts!(struct Irqs {
+        UARTE0 => uarte::InterruptHandler<peripherals::UARTE0>;
+
+    });
+
+    let board = Board::default();
+    let (sdc, mpsl) = board.ble.init(board.timer0, board.rng).unwrap();
+
+    let conf = {
+        let mut c = Config::default();
+        c.baudrate = Baudrate::BAUD9600;
+        c.parity = Parity::EXCLUDED;
+        c
+    };
+    let uarte = Uarte::new(board.uarte0, board.p0_26, board.p0_27, Irqs, conf);
+    let (_uarte_tx, mut uarte_rx) =
+        uarte.split_with_idle(board.timer1, board.ppi_ch0, board.ppi_ch1);
 
     spawner.must_spawn(mpsl_task(mpsl));
 
@@ -202,6 +266,10 @@ async fn main(spawner: Spawner) -> ! {
     let Host {
         peripheral, runner, ..
     } = stack.build();
-    let _ = join(ble_background_task(runner), run_ble(peripheral)).await;
+    let _ = join(
+        ble_background_task(runner),
+        run_ble(peripheral, &mut uarte_rx),
+    )
+    .await;
     panic!("[main] ble_background_task and run_ble terminated");
 }
