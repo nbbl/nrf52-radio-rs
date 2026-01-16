@@ -1,6 +1,7 @@
-//! Provide a (mocked) sensor reading via BLE:
-//! Advertise a GATT service of a battery level.
-//! Copied and adapted from the `trouble` crate
+//! Firmware for the Wio Tracker L1.
+//! Provides current time read from the L76K GNSS module
+//! as a BLE GATT service.
+//! Based on an example from the `trouble` crate
 //! (examples/apps/src/ble_bas_peripheral.rs).
 
 #![no_std]
@@ -50,6 +51,9 @@ struct BatteryService {
     status: bool,
 }
 
+/// Current Time characteristic of BLE
+/// see GATT specification supplement (2023-12-23)
+/// section 3.71
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct CurrentTime {
@@ -86,9 +90,10 @@ impl CurrentTime {
     }
 }
 
+/// GNSS service
 #[gatt_service(uuid = service::LOCATION_AND_NAVIGATION)]
 struct GnssService {
-    #[characteristic(uuid = characteristic::EXACT_TIME_256, read, notify)]
+    #[characteristic(uuid = characteristic::CURRENT_TIME, read, notify)]
     time: [u8; 10],
 }
 
@@ -143,6 +148,7 @@ async fn send_nmea_msg<P: PacketPool>(
         // GGA(gga_data) => {
         //     let gps_fix_str = defmt::Debug2Format(&gga_data);
         //     info!("[send_nmea_msg] received GPS fix: {}", gps_fix_str)
+        //     ...
         // }
         ZDA(zda_data) => {
             let maybe_utc_dt = zda_data.utc_date_time();
