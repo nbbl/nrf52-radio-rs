@@ -64,6 +64,21 @@
           "rttEnabled": true
         }
       ],
+    },
+    {
+      "type": "probe-rs-debug",
+      "request": "attach",
+      "name": "Attach to ble sensor reading with probe-rs",
+      "cwd": "${workspaceFolder}",
+      "chip": "nRF52840_xxAA",
+      "coreConfigs": [
+        {
+          "coreIndex": 0,
+          "programBinary": "${workspaceFolder}/target/thumbv7em-none-eabihf/debug/sensor_reading",
+          "rttEnabled": true
+        }
+      ],
+      "consoleLogLevel": "Console"
     }
   ]
 }

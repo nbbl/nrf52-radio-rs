@@ -1,14 +1,22 @@
-//! Provide a (mocked) sensor reading via BLE:
-//! Advertise a GATT service of a battery level.
-//! Copied and adapted from the `trouble` crate
+//! Firmware for the Wio Tracker L1.
+//! Provides current time read from the L76K GNSS module
+//! as a BLE GATT service.
+//! Based on an example from the `trouble` crate
 //! (examples/apps/src/ble_bas_peripheral.rs).
 
 #![no_std]
 #![no_main]
 
+use bytemuck::{Pod, Zeroable, checked::try_cast};
+use chrono::{Datelike, NaiveDateTime, Timelike};
 use defmt::{info, warn};
 use embassy_executor::Spawner;
-use embassy_futures::join::join;
+use embassy_futures::{join::join, select::select};
+use embassy_nrf::{
+    bind_interrupts, peripherals,
+    uarte::{self, Baudrate, Config, Parity, Uarte, UarteRxWithIdle, UarteTx},
+};
+use nmea::ParseResult::{self, ZDA};
 use nrf_mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::SoftdeviceController;
 use nrf52_radio_rs::Board;
@@ -20,10 +28,15 @@ const CONNECTIONS_MAX: usize = 1;
 /// Max number of L2CAP channels.
 const L2CAP_CHANNELS_MAX: usize = 2; // Signal + att
 
+/// PCAS message (proprietary NMEA message) to configure
+/// the receiver to start searching for satellites (GPS and BeiDou).
+const ENABLE_GNSS_MODULE: &[u8; 14] = b"$PCAS04,3*1A\r\n";
+
 // GATT Server definition
 #[gatt_server]
 struct Server {
     battery_service: BatteryService,
+    gnss_service: GnssService,
 }
 
 /// Battery service
@@ -38,9 +51,59 @@ struct BatteryService {
     status: bool,
 }
 
+/// Current Time characteristic of BLE
+/// see GATT specification supplement (2023-12-23)
+/// section 3.71
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct CurrentTime {
+    year: u16,
+    month: u8,
+    day: u8,
+    hours: u8,
+    minutes: u8,
+    seconds: u8,
+    day_of_week: u8,
+    fractions_256: u8,
+    adj_reason: u8,
+}
+
+impl CurrentTime {
+    pub fn from(date_time: &NaiveDateTime) -> Self {
+        let date = date_time.date();
+        let time = date_time.time();
+        CurrentTime {
+            year: date.year() as u16,
+            month: date.month() as u8,
+            day: date.day() as u8,
+            hours: time.hour() as u8,
+            minutes: time.minute() as u8,
+            seconds: time.second() as u8,
+            day_of_week: 0u8,
+            fractions_256: 0u8,
+            adj_reason: 0u8,
+        }
+    }
+
+    pub fn to_bytes(self) -> [u8; 10] {
+        try_cast(self).expect("CurrentTime should always have a representation of size 10 bytes")
+    }
+}
+
+/// GNSS service
+#[gatt_service(uuid = service::LOCATION_AND_NAVIGATION)]
+struct GnssService {
+    #[characteristic(uuid = characteristic::CURRENT_TIME, read, notify)]
+    time: [u8; 10],
+}
+
 /// Run the BLE stack.
-pub async fn run_ble(mut peri: Peripheral<'_, SoftdeviceController<'_>, DefaultPacketPool>) {
-    info!("Starting advertising and GATT service");
+pub async fn run_ble(
+    mut peri: Peripheral<'_, SoftdeviceController<'_>, DefaultPacketPool>,
+    gnss_uarte_rx: &mut UarteRxWithIdle<'_>,
+    gnss_uarte_tx: &mut UarteTx<'_>,
+) {
+    info!("[adv] start advertising and GATT service");
     let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
         name: "TrouBLE",
         appearance: &appearance::power_device::GENERIC_POWER_DEVICE,
@@ -52,13 +115,9 @@ pub async fn run_ble(mut peri: Peripheral<'_, SoftdeviceController<'_>, DefaultP
             match advertise("Trouble Example", &mut peri, &server).await {
                 Ok(conn) => {
                     // set up tasks when the connection is established to a central, so they don't run when no one is connected.
-                    let a = gatt_events_task(&server, &conn);
-                    // Other task could be added like this:
-                    // `let b = custom_task(&server, &conn);`
-                    // run until any task ends (usually because the connection has been closed),
-                    // then return to advertising state:
-                    // `select(a, b).await;`
-                    let _ = a.await;
+                    let gatt = gatt_events_task(&server, &conn);
+                    let gnss = gnss_notify_task(&server, &conn, gnss_uarte_rx, gnss_uarte_tx);
+                    let _ = select(gatt, gnss).await;
                 }
                 Err(e) => {
                     let e = defmt::Debug2Format(&e);
@@ -77,6 +136,87 @@ async fn ble_background_task(mut runner: Runner<'_, SoftdeviceController<'_>, De
             let e = defmt::Debug2Format(&e);
             panic!("[ble_background_task] error: {:?}", e);
         }
+    }
+}
+async fn send_nmea_msg<P: PacketPool>(
+    gnss_service: &GnssService,
+    conn: &GattConnection<'_, '_, P>,
+    parse_result: ParseResult,
+) {
+    match parse_result {
+        // TODO: Send messages for other NMEA sentences, e.g.:
+        // GGA(gga_data) => {
+        //     let gps_fix_str = defmt::Debug2Format(&gga_data);
+        //     info!("[send_nmea_msg] received GPS fix: {}", gps_fix_str)
+        //     ...
+        // }
+        ZDA(zda_data) => {
+            let maybe_utc_dt = zda_data.utc_date_time();
+            info!(
+                "[send_nmea_msg] current UTC time: {}",
+                defmt::Debug2Format(&maybe_utc_dt)
+            );
+            if let Some(dt) = maybe_utc_dt {
+                let _ = gnss_service
+                    .time
+                    .notify(conn, &CurrentTime::from(&dt).to_bytes())
+                    .await;
+            }
+        }
+        _ => {
+            warn!("[send_nmea_msg] unexpected NMEA sentence received")
+        }
+    }
+}
+
+async fn gnss_notify_task<P: PacketPool>(
+    server: &Server<'_>,
+    conn: &GattConnection<'_, '_, P>,
+    gnss_uarte_rx: &mut UarteRxWithIdle<'_>,
+    gnss_uarte_tx: &mut UarteTx<'_>,
+) {
+    // TODO: Put GNSS module into standby until it is actually needed?
+    // (when BLE connection is established.)
+
+    // TODO: Necessary to send ENABLE_GNSS_MODULE?
+    // TODO: Implement retrying of GNSS enabling?
+    if let Err(err) = gnss_uarte_tx.write(ENABLE_GNSS_MODULE).await {
+        panic!("[main] couldn't enable GNSS module: {:?} error", err);
+    };
+
+    // NMEA 0183 messages have a max length of 82 chars:
+    let mut nmea_buf = [0u8; 82];
+    let mut buf_idx: usize = 0;
+    loop {
+        match gnss_uarte_rx
+            .read_until_idle(&mut nmea_buf[buf_idx..buf_idx + 1])
+            .await
+        {
+            Ok(rx_len) => {
+                // TODO: Handle case when buf_idx out of bounds.
+                let nmea_sentence_terminated =
+                    buf_idx > 0 && nmea_buf[buf_idx - 1..buf_idx + 1] == *"\r\n".as_bytes();
+                if rx_len == 0 || nmea_sentence_terminated {
+                    let parsed = nmea::parse_bytes(&nmea_buf[..buf_idx + 1]);
+                    info!(
+                        "[gnss_notify_task] received NMEA sentence: {}",
+                        str::from_utf8(&nmea_buf[..buf_idx + 1]).unwrap_or("UTF8 error"),
+                    );
+                    buf_idx = 0;
+                    if let Ok(valid_nmea) = parsed {
+                        send_nmea_msg(&server.gnss_service, conn, valid_nmea).await;
+                    }
+                } else {
+                    buf_idx += 1;
+                    continue;
+                }
+            }
+            Err(e) => {
+                warn!("[gnss_notify_task] error receiving bytes: {:?} error", e);
+                buf_idx = 0;
+                continue;
+            }
+        };
     }
 }
 
@@ -165,8 +305,22 @@ async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> ! {
-    let b = Board::default();
-    let (sdc, mpsl) = b.ble.init(b.timer0, b.rng).unwrap();
+    bind_interrupts!(struct Irqs {
+        UARTE0 => uarte::InterruptHandler<peripherals::UARTE0>;
+    });
+
+    let board = Board::default();
+    let (sdc, mpsl) = board.ble.init(board.timer0, board.rng).unwrap();
+
+    let conf = {
+        let mut c = Config::default();
+        c.baudrate = Baudrate::BAUD9600;
+        c.parity = Parity::EXCLUDED;
+        c
+    };
+    let uarte = Uarte::new(board.uarte0, board.p0_26, board.p0_27, Irqs, conf);
+    let (mut uarte_tx, mut uarte_rx) =
+        uarte.split_with_idle(board.timer1, board.ppi_ch0, board.ppi_ch1);
 
     spawner.must_spawn(mpsl_task(mpsl));
 
@@ -181,6 +335,10 @@ async fn main(spawner: Spawner) -> ! {
     let Host {
         peripheral, runner, ..
     } = stack.build();
-    let _ = join(ble_background_task(runner), run_ble(peripheral)).await;
+    let _ = join(
+        ble_background_task(runner),
+        run_ble(peripheral, &mut uarte_rx, &mut uarte_tx),
+    )
+    .await;
     panic!("[main] ble_background_task and run_ble terminated");
 }
